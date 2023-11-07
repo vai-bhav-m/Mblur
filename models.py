@@ -1,84 +1,66 @@
 import torch
 import torch.nn as nn
 
-#  Basic Resnet
+#  Basic UNet
 #  Input: (batch_size, 3, height, width)
 #  Output: (batch_size, 3*5, height, width) -> Effectively 5 images with 3 channels each
 
-
-class BasicBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1):
-        super(BasicBlock, self).__init__()
-        self.conv1 = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=3,
-            stride=stride,
-            padding=1,
-            bias=False,
+class UNet(nn.Module):
+    def __init__(self):
+        super(UNet, self).__init__()
+        # Encoder (downsampling path)
+        self.encoder = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True)
         )
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv2d(
-            out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False
+        # Decoder (upsampling path)
+        self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 15, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True)
         )
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        self.stride = stride
 
     def forward(self, x):
-        identity = x
+        # Encoder forward pass
+        encoded_features = self.encoder(x)
+        # Decoder forward pass
+        output = self.decoder(encoded_features)
+        return output
 
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
+# Basic pseudo PoseNet
+# Input: (batch_size, 2*3, height, width)
+# Output: (batch_size, 6) -> 6 values signifying Tx, Ty, Tz, Rx, Ry, Rz transformations
 
-        out = self.conv2(out)
-        out = self.bn2(out)
-
-        if self.stride != 1 or identity.shape[1] != out.shape[1]:
-            identity = self.conv1(identity)
-
-        out += identity
-        out = self.relu(out)
-
-        return out
-
-
-class ResNet(nn.Module):
-    def __init__(self, in_channels, out_channels, block, num_blocks):
-        super(ResNet, self).__init__()
-        self.in_channels = in_channels
-        self.conv1 = nn.Conv2d(
-            in_channels, 64, kernel_size=3, stride=1, padding=1, bias=False
+class PoseNetCNN(nn.Module):
+    def __init__(self):
+        super(PoseNetCNN, self).__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(6, 32, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
         )
-        self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU(inplace=True)
-        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
-        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
-        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Conv2d(512, out_channels, kernel_size=1, stride=1, padding=0)
-
-    def _make_layer(self, block, out_channels, num_blocks, stride):
-        layers = []
-        layers.append(block(self.in_channels, out_channels, stride))
-        self.in_channels = out_channels
-        for _ in range(1, num_blocks):
-            layers.append(block(out_channels, out_channels))
-        return nn.Sequential(*layers)
+        self.classifier = nn.Sequential(
+            nn.Linear(128 * 8 * 8, 256),
+            nn.ReLU(),
+            nn.Linear(256, 6)
+        )
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
+        x = self.features(x)
+        x = x.view(x.size(0), -1)
+        x = self.classifier(x)
+        return x
 
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-
-        x = self.avg_pool(x)
-        x = self.fc(x)
-
-        return x.squeeze()
